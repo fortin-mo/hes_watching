@@ -38,7 +38,7 @@ registerPlugin({
 			]
 		},
 		{
-			name: 'channel_id',
+			name: 'idle_channel_id',
 			title: 'If clients should be moved, set channel id to move idle clients into it.',
 			type: 'channel'
 		},
@@ -63,53 +63,29 @@ registerPlugin({
 			type: 'multiline'
 		},
 		{
-			name: 'message',
+			name: 'kick_message',
 			title: 'Idle message, the client get this message as kick reason or chat message. ({IDLE_MAX_TIME} = Replaced with max idle time) ({IDLE_CHANNEL_NAME} = If clients should be moved, this will be replaced with the channel name of target idle channel) ({IDLE_CHANNEL_NAME} - If clients should be moved, this will be replaced with the channel name of target idle channel)',
 			type: 'multiline'
 		},
 		{
-			name: 'ignoredClients',
+			name: 'ignored_clients',
 			title: 'Clients that should be ignored. Use client databaseID seperated by semicolon. Ex : 12;23;34;56',
 			type: 'string'
 		},
 		{
-			name: 'ignoredChannels',
-			title: 'These channels will be ignored!',
-			type: 'array',
-			vars: [
-				{
-					name: 'channelId',
-					title: 'Channel',
-					indent: 2,
-					type: 'channel'
-				}
-			]
+			name: 'ignored_channels',
+			title: 'Channels that should be ignored. Use channel ID seperated by semicolon. Ex: 1;2;3;4',
+			type: 'string'
 		},
 		{
-			name: 'ignoredSubChannels',
-			title: 'These channels will be ignored with their subchannels!',
-			type: 'array',
-			vars: [
-				{
-					name: 'subChannelId',
-					title: 'Channel with subchannel',
-					indent: 2,
-					type: 'channel'
-				}
-			]
+			name: 'ignored_sub_channels',
+			title: 'Subchannels that should be ignored. Use subchannel ID seperated by semicolon. Ex: 1;2;3;4',
+			type: 'string'
 		},
 		{
-			name: 'ignoredServerGroups',
-			title: 'These servergroups will be ignored!',
-			type: 'array',
-			vars: [
-				{
-					name: 'serverGroup',
-					title: 'serverGroup (only one servergroup)',
-					indent: 2,
-					type: 'string'
-				}
-			]
+			name: 'ignored_server_group',
+			title: 'Server group that should be ignored. Use server group ID seperated by semicolon. Ex: 1;2;3;4',
+			type: 'string'
 		}
 	]
 }, function(sinusbot, config) {
@@ -125,16 +101,19 @@ registerPlugin({
 		return;
 	}
 
-	config.ignoredClients = typeof config.ignoredClients === 'undefined' ? '' : config.ignoredClients;
+	config.ignored_clients = typeof config.ignored_clients === 'undefined' ? '' : config.ignored_clients;
+	config.ignored_channels = typeof config.ignored_channels === 'undefined' ? '' : config.ignored_channels;
+	config.ignored_sub_channels = typeof config.ignored_sub_channels === 'undefined' ? '' : config.ignored_sub_channels;
+	config.ignored_server_group = typeof config.ignored_server_group === 'undefined' ? '' : config.ignored_server_group;
 	config.action = typeof config.action === 'undefined' || config.action  === '' ? 0 : config.action;
 	config.debug = typeof config.debug === 'undefined' || config.debug  === '' ? 0 : config.debug;
-	config.channel_id = typeof config.channel_id === 'undefined' || config.channel_id  === '' ? null : config.channel_id;
+	config.idle_channel_id = typeof config.idle_channel_id === 'undefined' || config.idle_channel_id  === '' ? null : config.idle_channel_id;
 	config.max_time = typeof config.max_time === 'undefined' || config.max_time  === '' ? 10 : config.max_time;
 	config.warn_time = typeof config.warn_time === 'undefined' || config.warn_time  === '' ? 0 : config.warn_time;
 	config.kick_time = typeof config.kick_time === 'undefined' || config.kick_time  === '' ? 0 : config.kick_time;
 	config.moveback = typeof config.moveback === 'undefined' || config.moveback  === '' ? 0 : config.moveback;
 		
-	if (config.channel_id === null) {
+	if (config.idle_channel_id === null) {
 		engine.log('Idle channel not defined - break');
 		return;
 	}
@@ -158,16 +137,15 @@ registerPlugin({
 		config.warn_message = 'You are already since {IDLE_WARN_TIME} minutes idle. If you are {IDLE_MAX_TIME} minutes idle, you will be moved to channel {IDLE_CHANNEL_NAME}!';
 	}
 
-	if (typeof config.message === 'undefined' || config.message === '') {
-		config.message = 'You are now idle for more than {IDLE_MAX_TIME} minutes, you got moved to the channel {IDLE_CHANNEL_NAME}!';
+	if (typeof config.kick_message === 'undefined' || config.kick_message === '') {
+		config.kick_message = 'You are now idle for more than {IDLE_MAX_TIME} minutes, you got moved to the channel {IDLE_CHANNEL_NAME}!';
 	}
 
 	var IDLE_KICK = config.action == 1;
 	var DEBUG = config.debug == 1;
-	var IDLE_CHANNEL_LIST = {};
-	var IDLE_GROUP_LIST = {};
-	var IDLE_MOVE_CHANNELID = config.channel_id;
-	var IDLE_MESSAGE = config.message;
+	var IGNORED_CHANNEL_LIST = {};
+	var IGNORED_GROUP_LIST = {};
+	var KICK_MESSAGE = config.kick_message;
 	var IDLE_MAX_TIME = parseInt(config.max_time); // * 1000 * 60;
 	var IDLE_WARN_MESSAGE = config.warn_message;
 	var IDLE_WARN_TIME = parseInt(config.warn_time); // * 1000 * 60;
@@ -176,11 +154,10 @@ registerPlugin({
 	var IDLE_CLIENTS_WARN_SENT = {};
 	var IDLE_MOVE_BACK = config.moveback == 1;
 	var IDLE_CLIENTS_MOVED = {};
-	var IDLE_CLIENTS_MOVED_CHANNEL = {};
-	var IDLE_CLIENTS_IGNORE = {};
+	var IGNORED_CLIENT_LIST = {};
 	var idleMessage = null;
 	var idleWarnMessage = null;
-	var idleChannel = backend.getChannelByID(IDLE_MOVE_CHANNELID);
+	var idleChannel = backend.getChannelByID(idle_channel_id);
 
 	if (!idleChannel) {
 		engine.log('Invalid channel ID !');
@@ -197,15 +174,15 @@ registerPlugin({
 		backend.getChannels().forEach(function(channel) {
 			var parent = channel.parent();
 			if (parent && currentChannel.id() === parent.id()) {
-				IDLE_CHANNEL_LIST[channel.id()] = true;
-				debug('ADDING CHANNEL TO LIST => ' + channel.id());
+				IGNORED_CHANNEL_LIST[channel.id()] = true;
+				debug('ADDING CHANNEL TO IGNORED LIST => ' + channel.id());
 				getChildren(channel);
 			}
 		});
 	};
 
 	function createMessage() {
-		idleMessage = IDLE_MESSAGE;
+		idleMessage = KICK_MESSAGE;
 		idleMessage = idleMessage.replace("{IDLE_MAX_TIME}", IDLE_MAX_TIME);
 		if (!IDLE_KICK) {
 			idleMessage = idleMessage.replace("{IDLE_CHANNEL_NAME}", idleChannel.name());
@@ -222,35 +199,48 @@ registerPlugin({
 		}
 	};
 
-	var arr = config.ignoredClients.split(';');
+	var arr = config.ignored_clients.split(';');
 	for(var i = 0; i < arr.length; i++) {
 		var dbID = arr[i].trim();
 		if (dbID !== '') {
-			IDLE_CLIENTS_IGNORE[dbID] = true;
+			IGNORED_CLIENT_LIST[dbID] = true;
+			debug('ADDING CLIENT TO IGNORED LIST => ' + dbID);
 		}
 	};
 
-	for(var i = 0; i < (config.ignoredChannels || []).length; i++) {
-		IDLE_CHANNEL_LIST[config.ignoredChannels[i].channelId] = true;
-		debug('ADDING CHANNEL TO LIST => ' + config.ignoredChannels[i].channelId);
-	}
+	arr = config.ignored_channels.split(';');
+	for(var i = 0; i < arr.length; i++) {
+		var dbID = arr[i].trim();
+		if (dbID !== '') {
+			IGNORED_CHANNEL_LIST[dbID] = true;
+			debug('ADDING CHANNEL TO IGNORED LIST => ' + dbID);
+		}
+	};
 
-	for(var i = 0; i < (config.ignoredSubChannels || []).length; i++) {
-		IDLE_CHANNEL_LIST[config.ignoredSubChannels[i].subChannelId] = true;
-		debug('ADDING CHANNEL TO LIST => ' + config.ignoredSubChannels[i].subChannelId);
-		getChildren(backend.getChannelByID(config.ignoredSubChannels[i].subChannelId));
-	}
+	arr = config.ignored_sub_channels.split(';');
+	for(var i = 0; i < arr.length; i++) {
+		var dbID = arr[i].trim();
+		if (dbID !== '') {
+			IGNORED_CHANNEL_LIST[dbID] = true;
+			debug('ADDING CHANNEL TO IGNORED LIST => ' + dbID);
+			getChildren(backend.getChannelByID(dbID));
+		}
+	};
 
-	for(var i = 0; i < (config.ignoredServerGroups || []).length; i++) {
-		IDLE_GROUP_LIST[config.ignoredServerGroups[i].serverGroup] = true;
-		debug('ADDING SERVER GROUP TO LIST => ' + config.ignoredServerGroups[i].serverGroup);
-	}
+	arr = config.ignored_server_group.split(';');
+	for(var i = 0; i < arr.length; i++) {
+		var dbID = arr[i].trim();
+		if (dbID !== '') {
+			IGNORED_CLIENT_LIST[dbID] = true;
+			debug('ADDING SERVER GROUP TO IGNORED LIST => ' + dbID);
+		}
+	};
 
 	debug('IDLE_MAX_TIME => ' + IDLE_MAX_TIME);
 	debug('IDLE_WARN_TIME => ' + IDLE_WARN_TIME);
 	debug('IDLE_MOVE_BACK => ' + IDLE_MOVE_BACK);
 	debug('IDLE_KICK => ' + IDLE_KICK);
-	debug('IDLE_MESSAGE => ' + IDLE_MESSAGE);
+	debug('KICK_MESSAGE => ' + KICK_MESSAGE);
 	debug('IDLE_WARN_MESSAGE => ' + IDLE_WARN_MESSAGE);
 	debug('KICK_TIME => ' + KICK_TIME);
 
@@ -287,7 +277,7 @@ registerPlugin({
 			idleTime = Math.floor(client.getIdleTime() / (1000 * 60));
 			debug('idle time => ' + idleTime + ' minutes');
 
-			if (IDLE_CLIENTS_IGNORE[clientID]) {
+			if (IGNORED_CLIENT_LIST[clientID]) {
 				debug('client is ignored');
 				return; // skip ignored client
 			}
@@ -312,7 +302,7 @@ registerPlugin({
 					return; // skip client already in the AFK channel
 				}
 
-				var skip = isIDListed(clientChan, IDLE_CHANNEL_LIST) || isIDListed(clientServerGroups, IDLE_GROUP_LIST);
+				var skip = isIDListed(clientChan, IGNORED_CHANNEL_LIST) || isIDListed(clientServerGroups, IGNORED_GROUP_LIST);
 
 				debug('skipping client base on channel and groups : ' + skip);
 				
@@ -332,7 +322,7 @@ registerPlugin({
 				}
 			} else if (IDLE_WARN_TIME > 0 && idleTime >= IDLE_WARN_TIME) {
 				if (!IDLE_CLIENTS_WARN_SENT[clientID]) {
-					var skip = isIDListed(clientChan, IDLE_CHANNEL_LIST) || isIDListed(clientServerGroups, IDLE_GROUP_LIST);
+					var skip = isIDListed(clientChan, IGNORED_CHANNEL_LIST) || isIDListed(clientServerGroups, IGNORED_GROUP_LIST);
 					if (clientChan !== idleChannel.id() && !skip) {
 						client.chat(idleWarnMessage);
 						IDLE_CLIENTS_WARN_SENT[clientID] = true;
